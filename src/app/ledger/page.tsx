@@ -96,6 +96,29 @@ export default function LedgerPage() {
   const [categoryId, setCategoryId] = useState("");
   const [candidatesSource, setCandidatesSource] = useState<Candidate[]>([]);
   const [saving, setSaving] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [companyLookupState, setCompanyLookupState] = useState<
+    "loading" | "ready" | "failed"
+  >("loading");
+  const [childLookupState, setChildLookupState] = useState<
+    "loading" | "ready" | "failed"
+  >("ready");
+  const [lookupRetryCount, setLookupRetryCount] = useState(0);
+  const [childRetryCount, setChildRetryCount] = useState(0);
+  const [resolvedChildLookupCompanyId, setResolvedChildLookupCompanyId] = useState<
+    string | null
+  >(null);
+
+  const [pendingChildSelections, setPendingChildSelections] = useState<{
+    companyId: string;
+    siteId: string;
+    categoryId: string;
+  } | null>(null);
+  const [initialMaster, setInitialMaster] = useState<{
+    companyId: string;
+    siteId: string;
+    categoryId: string;
+  } | null>(null);
 
   const [draftAvailable, setDraftAvailable] = useState<DraftState | null>(null);
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
@@ -116,22 +139,72 @@ export default function LedgerPage() {
 
     const savedMaster = window.localStorage.getItem(masterDataStorageKey);
     if (savedMaster && !draft) {
-      // Only set master data from previous if we aren't showing a draft prompt, otherwise wait for draft restore
       try {
         const parsed = JSON.parse(savedMaster);
-        if (parsed.companyId) setCompanyId(parsed.companyId);
-        if (parsed.siteId) setSiteId(parsed.siteId);
-        if (parsed.categoryId) setCategoryId(parsed.categoryId);
+        setInitialMaster(parsed);
       } catch {
         window.localStorage.removeItem(masterDataStorageKey);
       }
     }
 
-    fetch("/api/master-data/companies")
-      .then((r) => r.json())
-      .then((d) => setCompanies(d.records || []))
-      .catch(() => {});
-  }, []);
+    const aborter = new AbortController();
+    setCompanyLookupState("loading");
+    setLookupError(null);
+    fetch("/api/ledger/lookups", { signal: aborter.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("조회 권한이 없거나 불러오기에 실패했습니다.");
+        return r.json();
+      })
+      .then((d) => {
+        if (aborter.signal.aborted) return;
+        const comps = d.companies || [];
+        setCompanies(comps);
+        setCompanyLookupState("ready");
+      })
+      .catch((e) => {
+        if (aborter.signal.aborted) return;
+        if (e.name !== "AbortError") {
+          setLookupError(e.message || "회사 목록을 불러오지 못했습니다.");
+          setCompanyLookupState("failed");
+          setCompanies([]);
+          setCompanyId("");
+          setSiteId("");
+          setCategoryId("");
+          setSites([]);
+          setCategories([]);
+          setCandidatesSource([]);
+        }
+      });
+    return () => aborter.abort();
+  }, [lookupRetryCount]);
+
+  useEffect(() => {
+    if (companyLookupState === "ready") {
+      if (initialMaster) {
+        if (
+          initialMaster.companyId &&
+          companies.some((c) => c.id === initialMaster.companyId)
+        ) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setCompanyId(initialMaster.companyId);
+          setPendingChildSelections({
+            companyId: initialMaster.companyId,
+            siteId: initialMaster.siteId || "",
+            categoryId: initialMaster.categoryId || "",
+          });
+        }
+        setInitialMaster(null);
+      } else if (companyId) {
+        if (!companies.some((c) => c.id === companyId)) {
+          alert("이전에 선택한 회사에 대한 접근 권한이 없습니다. 다시 선택해주세요.");
+          setCompanyId("");
+          setSiteId("");
+          setCategoryId("");
+          setPendingChildSelections(null);
+        }
+      }
+    }
+  }, [companyLookupState, companies, initialMaster, companyId]);
 
   // Autosave
   useEffect(() => {
@@ -149,36 +222,143 @@ export default function LedgerPage() {
   }, [rows, companyId, siteId, categoryId, draftAvailable]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setResolvedChildLookupCompanyId(null);
     if (!companyId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSites([]);
       setCategories([]);
       setCandidatesSource([]);
       return;
     }
-    fetch(`/api/master-data/sites?companyId=${companyId}`)
-      .then((r) => r.json())
-      .then((d) => setSites(d.records || []))
-      .catch(() => {});
-    fetch(`/api/master-data/cost-categories?companyId=${companyId}`)
-      .then((r) => r.json())
-      .then((d) => setCategories(d.records || []))
-      .catch(() => {});
-    fetch(`/api/ledger?companyId=${companyId}`)
-      .then((r) => r.json())
-      .then((d) => setCandidatesSource(d.records || []))
-      .catch(() => {});
-  }, [companyId]);
+
+    setSites([]);
+    setCategories([]);
+    setCandidatesSource([]);
+    setLookupError(null);
+    setChildLookupState("loading");
+
+    const aborter = new AbortController();
+    fetch(`/api/ledger/lookups?companyId=${companyId}`, { signal: aborter.signal })
+      .then(async (r) => {
+        if (!r.ok) throw new Error("현장 및 비용분류 정보를 불러올 수 없습니다.");
+        return r.json();
+      })
+      .then((d) => {
+        if (aborter.signal.aborted) return;
+        const allowedSites = d.sites || [];
+        const allowedCats = d.costCategories || [];
+        setSites(allowedSites);
+        setCategories(allowedCats);
+        setResolvedChildLookupCompanyId(companyId);
+        setChildLookupState("ready");
+
+        fetch(`/api/ledger?companyId=${companyId}`, { signal: aborter.signal })
+          .then((r) => r.json())
+          .then((data) => {
+            if (aborter.signal.aborted) return;
+            setCandidatesSource(data.records || []);
+          })
+          .catch(() => {});
+      })
+      .catch((e) => {
+        if (aborter.signal.aborted) return;
+        if (e.name !== "AbortError") {
+          setLookupError(e.message || "현장/비용분류 정보를 불러오지 못했습니다.");
+          setSiteId("");
+          setCategoryId("");
+          setResolvedChildLookupCompanyId(null);
+          setChildLookupState("failed");
+        }
+      });
+
+    return () => aborter.abort();
+  }, [companyId, childRetryCount]);
+
+  useEffect(() => {
+    if (
+      childLookupState === "ready" &&
+      companyId &&
+      resolvedChildLookupCompanyId === companyId
+    ) {
+      if (pendingChildSelections && pendingChildSelections.companyId === companyId) {
+        let invalid = false;
+        let finalSite = pendingChildSelections.siteId;
+        let finalCategory = pendingChildSelections.categoryId;
+
+        if (finalSite && !sites.some((s) => s.id === finalSite)) {
+          invalid = true;
+          finalSite = "";
+        }
+        if (finalCategory && !categories.some((c) => c.id === finalCategory)) {
+          invalid = true;
+          finalCategory = "";
+        }
+
+        if (invalid) {
+          alert(
+            "접근 권한이 없는 현장 또는 비용분류가 있어 값이 초기화되었습니다. 다시 선택해주세요.",
+          );
+        }
+
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSiteId(finalSite);
+        setCategoryId(finalCategory);
+        setPendingChildSelections(null);
+      } else {
+        const invalid =
+          (siteId && !sites.some((s) => s.id === siteId)) ||
+          (categoryId && !categories.some((c) => c.id === categoryId));
+
+        if (invalid) {
+          if (siteId && !sites.some((s) => s.id === siteId)) setSiteId("");
+          if (categoryId && !categories.some((c) => c.id === categoryId))
+            setCategoryId("");
+        }
+      }
+    }
+  }, [
+    childLookupState,
+    companyId,
+    resolvedChildLookupCompanyId,
+    pendingChildSelections,
+    siteId,
+    categoryId,
+    sites,
+    categories,
+  ]);
 
   const handleRestoreDraft = () => {
     if (!draftAvailable) return;
+
+    let targetCompany = draftAvailable.companyId;
+    const targetSite = draftAvailable.siteId;
+    const targetCategory = draftAvailable.categoryId;
+
+    if (
+      companyLookupState !== "ready" ||
+      !companies.some((c) => c.id === targetCompany)
+    ) {
+      alert("소속 정보 확인 후 회사·현장·비용분류를 다시 선택해 주세요.");
+      targetCompany = "";
+      setPendingChildSelections(null);
+      setCompanyId("");
+      setSiteId("");
+      setCategoryId("");
+    } else {
+      setCompanyId(targetCompany);
+      setSiteId("");
+      setCategoryId("");
+      setPendingChildSelections({
+        companyId: targetCompany,
+        siteId: targetSite,
+        categoryId: targetCategory,
+      });
+    }
+
     setRows([
       ...draftAvailable.rows.map(recalculate),
       ...Array.from({ length: Math.max(0, 12 - draftAvailable.rows.length) }, blank),
     ]);
-    setCompanyId(draftAvailable.companyId);
-    setSiteId(draftAvailable.siteId);
-    setCategoryId(draftAvailable.categoryId);
     setDraftAvailable(null);
   };
 
@@ -223,13 +403,36 @@ export default function LedgerPage() {
       )
         return;
     }
+
+    let targetCompany = t.companyId;
+    const targetSite = t.siteId;
+    const targetCategory = t.categoryId;
+
+    if (
+      companyLookupState !== "ready" ||
+      !companies.some((c) => c.id === targetCompany)
+    ) {
+      alert("소속 정보 확인 후 회사·현장·비용분류를 다시 선택해 주세요.");
+      targetCompany = "";
+      setPendingChildSelections(null);
+      setCompanyId("");
+      setSiteId("");
+      setCategoryId("");
+    } else {
+      setCompanyId(targetCompany);
+      setSiteId("");
+      setCategoryId("");
+      setPendingChildSelections({
+        companyId: targetCompany,
+        siteId: targetSite,
+        categoryId: targetCategory,
+      });
+    }
+
     setRows([
       ...t.rows.map(recalculate),
       ...Array.from({ length: Math.max(0, 12 - t.rows.length) }, blank),
     ]);
-    setCompanyId(t.companyId);
-    setSiteId(t.siteId);
-    setCategoryId(t.categoryId);
   };
 
   const handleDeleteTemplate = () => {
@@ -445,12 +648,45 @@ export default function LedgerPage() {
       </section>
 
       <section className={styles.toolbar}>
+        {lookupError && (
+          <div
+            style={{
+              color: "red",
+              fontWeight: "bold",
+              marginRight: "12px",
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+            }}
+          >
+            {lookupError}
+            <button
+              type="button"
+              onClick={() => {
+                if (companyLookupState === "failed") setLookupRetryCount((c) => c + 1);
+                else if (childLookupState === "failed")
+                  setChildRetryCount((c) => c + 1);
+              }}
+              style={{
+                padding: "4px 8px",
+                border: "1px solid #ef4444",
+                borderRadius: "4px",
+                background: "white",
+                color: "#ef4444",
+                cursor: "pointer",
+              }}
+            >
+              다시 시도
+            </button>
+          </div>
+        )}
         <select
           value={companyId}
           onChange={(e) => {
             setCompanyId(e.target.value);
             setSiteId("");
             setCategoryId("");
+            setPendingChildSelections(null);
           }}
           style={{ padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
         >
