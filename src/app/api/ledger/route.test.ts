@@ -224,6 +224,148 @@ describe("Ledger API Scope and Permissions", () => {
     });
   });
 
+  describe("GET Filters and Pagination", () => {
+    beforeEach(() => {
+      (auth.hasPermission as unknown as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    });
+
+    it("returns 400 for invalid dates or UUIDs", async () => {
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&from=invalid",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 for invalid cursor format", async () => {
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&cursor=bad_cursor",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 for non-calendar dates", async () => {
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&from=2023-02-29",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 for fractional limit", async () => {
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&limit=1.5",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("returns 400 if from > to", async () => {
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&from=2023-12-31&to=2023-01-01",
+        ),
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("all_sites scope is maintained when filtering by siteId", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([]); // no records
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&siteId=00000000-0000-4000-8000-000000000002",
+        ),
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("selected_sites rejects unallowed siteId filter (403)", async () => {
+      mockWhere
+        .mockResolvedValueOnce([{ id: "m-1", scope: "selected_sites" }]) // companyScope
+        .mockResolvedValueOnce([{ siteId: "00000000-0000-4000-8000-000000000003" }]); // siteScopes
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&siteId=00000000-0000-4000-8000-000000000002",
+        ),
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("selected_sites with 0 active sites and siteId requested -> 403", async () => {
+      mockWhere
+        .mockResolvedValueOnce([{ id: "m-1", scope: "selected_sites" }]) // companyScope
+        .mockResolvedValueOnce([]); // siteScopes (0 active sites)
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&siteId=00000000-0000-4000-8000-000000000002",
+        ),
+      );
+      expect(res.status).toBe(403);
+    });
+
+    it("returns records and nextCursor if limit is exceeded", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([
+        { id: "00000000-0000-4000-8000-00000000000a", occurredOn: "2023-01-03" },
+        { id: "00000000-0000-4000-8000-00000000000b", occurredOn: "2023-01-02" },
+        { id: "00000000-0000-4000-8000-00000000000c", occurredOn: "2023-01-01" },
+      ]);
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&limit=2",
+        ),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.records).toHaveLength(2);
+      expect(data.nextCursor).toBe("2023-01-02_00000000-0000-4000-8000-00000000000b");
+    });
+
+    it("returns nextCursor = null if limit is not exceeded", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([
+        { id: "00000000-0000-4000-8000-00000000000a", occurredOn: "2023-01-03" },
+      ]);
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&limit=2",
+        ),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.records).toHaveLength(1);
+      expect(data.nextCursor).toBeNull();
+    });
+
+    it("applies range, item, category filters", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([]);
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&from=2023-01-01&to=2023-12-31&itemQuery=test&costCategoryId=00000000-0000-4000-8000-000000000002",
+        ),
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("applies cursor filter", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([]);
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001&cursor=2023-01-01_00000000-0000-4000-8000-000000000001",
+        ),
+      );
+      expect(res.status).toBe(200);
+    });
+  });
+
   describe("Regression: Existing POST Validations", () => {
     beforeEach(() => {
       (auth.hasPermission as unknown as ReturnType<typeof vi.fn>).mockReturnValue(true);

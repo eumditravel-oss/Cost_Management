@@ -1,8 +1,5 @@
-import { desc, eq, inArray, and } from "drizzle-orm";
+import { desc, eq, inArray, and, gte, lte, like, lt, or } from "drizzle-orm";
 import { z } from "zod";
-import { getCurrentIdentity } from "@/auth/identity";
-import { hasPermission } from "@/auth/authorization";
-import { createDatabase } from "@/db/client";
 import {
   costEntries,
   costEntryAuditLogs,
@@ -12,6 +9,9 @@ import {
   userSiteMemberships,
 } from "@/db/schema";
 import { calculateMoney } from "@/ledger/calculation";
+import { getCurrentIdentity } from "@/auth/identity";
+import { hasPermission } from "@/auth/authorization";
+import { createDatabase } from "@/db/client";
 
 const entry = z.object({
   companyId: z.uuid(),
@@ -35,6 +35,27 @@ async function requirePermission(permission: "ledger.read" | "ledger.write") {
   return hasPermission(current, permission) ? current : false;
 }
 
+const getQuerySchema = z
+  .object({
+    companyId: z.string().uuid(),
+    from: z.string().date().optional(),
+    to: z.string().date().optional(),
+    siteId: z.string().uuid().optional(),
+    costCategoryId: z.string().uuid().optional(),
+    itemQuery: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(100).default(50),
+    cursor: z.string().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.from && data.to) {
+        return data.from <= data.to;
+      }
+      return true;
+    },
+    { message: "from_cannot_be_after_to" },
+  );
+
 export async function GET(request: Request) {
   const current = await requirePermission("ledger.read");
   if (!current)
@@ -42,9 +63,33 @@ export async function GET(request: Request) {
       { error: current === null ? "UNAUTHENTICATED" : "FORBIDDEN" },
       { status: current === null ? 401 : 403 },
     );
-  const companyId = new URL(request.url).searchParams.get("companyId");
-  if (!companyId || !z.string().uuid().safeParse(companyId).success)
-    return Response.json({ error: "COMPANY_ID_REQUIRED" }, { status: 400 });
+
+  const { searchParams } = new URL(request.url);
+  const rawParams = Object.fromEntries(searchParams.entries());
+  const parsed = getQuerySchema.safeParse(rawParams);
+
+  if (!parsed.success) {
+    return Response.json({ error: "VALIDATION_ERROR" }, { status: 400 });
+  }
+
+  const { companyId, from, to, siteId, costCategoryId, itemQuery, limit, cursor } =
+    parsed.data;
+
+  let cursorOccurredOn: string | undefined;
+  let cursorId: string | undefined;
+  if (cursor) {
+    const parts = cursor.split("_");
+    if (
+      parts.length !== 2 ||
+      !z.string().date().safeParse(parts[0]).success ||
+      !z.string().uuid().safeParse(parts[1]).success
+    ) {
+      return Response.json({ error: "VALIDATION_ERROR" }, { status: 400 });
+    }
+    cursorOccurredOn = parts[0];
+    cursorId = parts[1];
+  }
+
   const { client, database } = createDatabase();
   try {
     const companyScope = await database
@@ -79,26 +124,61 @@ export async function GET(request: Request) {
           ),
         );
       allowedSiteIds = siteScopes.map((s) => s.siteId);
-      if (allowedSiteIds.length === 0) {
-        return Response.json({ records: [] });
+
+      if (siteId && !allowedSiteIds.includes(siteId)) {
+        return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
       }
+
+      if (allowedSiteIds.length === 0) {
+        return Response.json({ records: [], nextCursor: null });
+      }
+    }
+
+    const conditions = [eq(costEntries.companyId, companyId)];
+
+    if (allowedSiteIds) {
+      if (siteId) {
+        conditions.push(eq(costEntries.siteId, siteId));
+      } else {
+        conditions.push(inArray(costEntries.siteId, allowedSiteIds));
+      }
+    } else {
+      if (siteId) conditions.push(eq(costEntries.siteId, siteId));
+    }
+
+    if (from) conditions.push(gte(costEntries.occurredOn, from));
+    if (to) conditions.push(lte(costEntries.occurredOn, to));
+    if (costCategoryId) conditions.push(eq(costEntries.costCategoryId, costCategoryId));
+    if (itemQuery) conditions.push(like(costEntries.itemName, `%${itemQuery}%`));
+
+    if (cursorOccurredOn && cursorId) {
+      conditions.push(
+        or(
+          lt(costEntries.occurredOn, cursorOccurredOn),
+          and(
+            eq(costEntries.occurredOn, cursorOccurredOn),
+            lt(costEntries.id, cursorId),
+          )!,
+        )!,
+      );
     }
 
     const query = database
       .select()
       .from(costEntries)
-      .where(
-        and(
-          eq(costEntries.companyId, companyId),
-          allowedSiteIds ? inArray(costEntries.siteId, allowedSiteIds) : undefined,
-        ),
-      )
-      .orderBy(desc(costEntries.occurredOn))
-      .limit(200);
+      .where(and(...conditions))
+      .orderBy(desc(costEntries.occurredOn), desc(costEntries.id))
+      .limit(limit + 1);
 
-    return Response.json({
-      records: await query,
-    });
+    const result = await query;
+    let nextCursor: string | null = null;
+    if (result.length > limit) {
+      const lastRecord = result[limit - 1];
+      nextCursor = `${lastRecord.occurredOn}_${lastRecord.id}`;
+      result.pop();
+    }
+
+    return Response.json({ records: result, nextCursor });
   } finally {
     await client.end({ timeout: 5 });
   }
