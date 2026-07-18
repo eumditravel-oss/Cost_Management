@@ -77,12 +77,30 @@
   border-color: #2563eb;
   background: #eff6ff;
 }
+.page input[aria-invalid="true"] {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
 .readonly {
   min-width: 100px;
   padding: 9px;
   background: #f8fafc;
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+.statusCell {
+  min-width: 180px;
+  padding: 9px;
+  font-size: 12px;
+  background: #f8fafc;
+}
+.errorSummary {
+  color: #ef4444;
+  margin-bottom: 4px;
+}
+.warningSummary {
+  color: #ca8a04;
+  font-weight: 500;
 }
 .help {
   max-width: 1200px;

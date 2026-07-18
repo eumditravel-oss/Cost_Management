@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { calculateMoney } from "@/ledger/calculation";
+import { validateRow, findDuplicateCandidates, Candidate } from "@/ledger/review";
 import styles from "./page.module.css";
 
 type Row = {
@@ -87,6 +88,7 @@ export default function LedgerPage() {
   const [companyId, setCompanyId] = useState("");
   const [siteId, setSiteId] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [candidatesSource, setCandidatesSource] = useState<Candidate[]>([]);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -140,6 +142,7 @@ export default function LedgerPage() {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSites([]);
       setCategories([]);
+      setCandidatesSource([]);
       return;
     }
     fetch(`/api/master-data/sites?companyId=${companyId}`)
@@ -149,6 +152,10 @@ export default function LedgerPage() {
     fetch(`/api/master-data/cost-categories?companyId=${companyId}`)
       .then((r) => r.json())
       .then((d) => setCategories(d.records || []))
+      .catch(() => {});
+    fetch(`/api/ledger?companyId=${companyId}`)
+      .then((r) => r.json())
+      .then((d) => setCandidatesSource(d.records || []))
       .catch(() => {});
   }, [companyId]);
 
@@ -366,52 +373,82 @@ export default function LedgerPage() {
               {displayFields.map((field) => (
                 <th key={field}>{labels[field]}</th>
               ))}
+              <th key="status">상태</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, rowIndex) => (
-              <tr key={rowIndex}>
-                {fields.map((field) => (
-                  <td key={field}>
-                    {field === "isManualTax" ? (
-                      <input
-                        type="checkbox"
-                        checked={row[field]}
-                        onChange={(e) => update(rowIndex, field, e.target.checked)}
-                      />
-                    ) : (
-                      <input
-                        data-cell={`${rowIndex}-${field}`}
-                        value={row[field] as string}
-                        aria-label={`${rowIndex + 1}행 ${labels[field]}`}
-                        onChange={(event) =>
-                          update(rowIndex, field, event.target.value)
-                        }
-                        onPaste={(event) => paste(event, rowIndex, field)}
-                        onKeyDown={(event) => moveNext(event, rowIndex, field)}
-                        readOnly={field === "taxAmount" && !row.isManualTax}
-                        style={{
-                          backgroundColor:
-                            field === "taxAmount" && !row.isManualTax
-                              ? "#f1f5f9"
-                              : "transparent",
-                        }}
-                        inputMode={
-                          field === "quantity" ||
-                          field === "unitPrice" ||
-                          field === "supplyAmount" ||
-                          field === "taxRate" ||
-                          field === "taxAmount"
-                            ? "decimal"
-                            : undefined
-                        }
-                      />
+            {rows.map((row, rowIndex) => {
+              const rowErrors = validateRow(row);
+              const errorFields = rowErrors.map((e) => e.field);
+              const duplicates = findDuplicateCandidates(
+                row,
+                rowIndex,
+                rows,
+                candidatesSource,
+                { companyId, siteId, categoryId },
+              );
+
+              return (
+                <tr key={rowIndex}>
+                  {fields.map((field) => (
+                    <td key={field}>
+                      {field === "isManualTax" ? (
+                        <input
+                          type="checkbox"
+                          checked={row[field]}
+                          onChange={(e) => update(rowIndex, field, e.target.checked)}
+                        />
+                      ) : (
+                        <input
+                          data-cell={`${rowIndex}-${field}`}
+                          value={row[field] as string}
+                          aria-label={`${rowIndex + 1}행 ${labels[field]}`}
+                          aria-invalid={
+                            errorFields.includes(field) ? "true" : undefined
+                          }
+                          onChange={(event) =>
+                            update(rowIndex, field, event.target.value)
+                          }
+                          onPaste={(event) => paste(event, rowIndex, field)}
+                          onKeyDown={(event) => moveNext(event, rowIndex, field)}
+                          readOnly={field === "taxAmount" && !row.isManualTax}
+                          style={{
+                            backgroundColor:
+                              field === "taxAmount" && !row.isManualTax
+                                ? "#f1f5f9"
+                                : "transparent",
+                          }}
+                          inputMode={
+                            field === "quantity" ||
+                            field === "unitPrice" ||
+                            field === "supplyAmount" ||
+                            field === "taxRate" ||
+                            field === "taxAmount"
+                              ? "decimal"
+                              : undefined
+                          }
+                        />
+                      )}
+                    </td>
+                  ))}
+                  <td className={styles.readonly}>{row.totalAmount}</td>
+                  <td className={styles.statusCell}>
+                    {rowErrors.length > 0 && (
+                      <div className={styles.errorSummary}>
+                        {rowErrors.map((e, i) => (
+                          <div key={i}>❌ {e.message}</div>
+                        ))}
+                      </div>
+                    )}
+                    {duplicates.length > 0 && (
+                      <div className={styles.warningSummary}>
+                        ⚠️ 중복 의심 ({duplicates.length}건)
+                      </div>
                     )}
                   </td>
-                ))}
-                <td className={styles.readonly}>{row.totalAmount}</td>
-              </tr>
-            ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
