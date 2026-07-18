@@ -29,6 +29,13 @@
       "when": 1784217248593,
       "tag": "0003_eager_sharon_carter",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784351488407,
+      "tag": "0004_last_stellaris",
+      "breakpoints": true
     }
   ]
 }

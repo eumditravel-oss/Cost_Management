@@ -1,4 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
+  check,
+  foreignKey,
   numeric,
   pgTable,
   text,
@@ -37,7 +40,10 @@ export const sites = pgTable(
     active: varchar("active", { length: 10 }).notNull().default("active"),
     ...created,
   },
-  (t) => [uniqueIndex("sites_company_code_unique").on(t.companyId, t.code)],
+  (t) => [
+    uniqueIndex("sites_company_code_unique").on(t.companyId, t.code),
+    uniqueIndex("sites_id_company_unique").on(t.id, t.companyId),
+  ],
 );
 export const contracts = pgTable(
   "contracts",
@@ -170,3 +176,66 @@ export const masterDataAuditLogs = pgTable("master_data_audit_logs", {
   reason: varchar("reason", { length: 500 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export const userCompanyMemberships = pgTable(
+  "user_company_memberships",
+  {
+    id: uuid("id").primaryKey(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id),
+    siteAccessScope: varchar("site_access_scope", { length: 20 }).notNull(), // 'all_sites' | 'selected_sites'
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    ...created,
+  },
+  (t) => [
+    uniqueIndex("user_company_memberships_user_company_unique").on(
+      t.userId,
+      t.companyId,
+    ),
+    uniqueIndex("user_company_memberships_id_company_unique").on(t.id, t.companyId),
+    check(
+      "user_company_memberships_scope_check",
+      sql`${t.siteAccessScope} IN ('all_sites', 'selected_sites')`,
+    ),
+    check(
+      "user_company_memberships_status_check",
+      sql`${t.status} IN ('active', 'inactive')`,
+    ),
+  ],
+);
+
+export const userSiteMemberships = pgTable(
+  "user_site_memberships",
+  {
+    id: uuid("id").primaryKey(),
+    companyMembershipId: uuid("company_membership_id").notNull(),
+    companyId: uuid("company_id").notNull(),
+    siteId: uuid("site_id").notNull(),
+    status: varchar("status", { length: 20 }).notNull().default("active"),
+    ...created,
+  },
+  (t) => [
+    uniqueIndex("user_site_memberships_membership_site_unique").on(
+      t.companyMembershipId,
+      t.siteId,
+    ),
+    foreignKey({
+      columns: [t.companyMembershipId, t.companyId],
+      foreignColumns: [userCompanyMemberships.id, userCompanyMemberships.companyId],
+      name: "user_site_memberships_company_fk",
+    }),
+    foreignKey({
+      columns: [t.siteId, t.companyId],
+      foreignColumns: [sites.id, sites.companyId],
+      name: "user_site_memberships_site_fk",
+    }),
+    check(
+      "user_site_memberships_status_check",
+      sql`${t.status} IN ('active', 'inactive')`,
+    ),
+  ],
+);
