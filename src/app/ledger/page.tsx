@@ -11,6 +11,7 @@ type Row = {
   unitPrice: string;
   supplyAmount: string;
   taxRate: string;
+  isManualTax: boolean;
   taxAmount: string;
   totalAmount: string;
   description: string;
@@ -22,6 +23,7 @@ const fields: (keyof Row)[] = [
   "unitPrice",
   "supplyAmount",
   "taxRate",
+  "isManualTax",
   "taxAmount",
   "description",
 ];
@@ -33,6 +35,7 @@ const labels: Record<keyof Row, string> = {
   unitPrice: "단가",
   supplyAmount: "공급가액",
   taxRate: "세율(%)",
+  isManualTax: "수기 세액",
   taxAmount: "부가세",
   totalAmount: "합계",
   description: "적요",
@@ -44,6 +47,7 @@ const blank = (): Row => ({
   unitPrice: "",
   supplyAmount: "",
   taxRate: "",
+  isManualTax: false,
   taxAmount: "",
   totalAmount: "0.00",
   description: "",
@@ -58,6 +62,7 @@ function recalculate(row: Row): Row {
     supplyAmount: row.supplyAmount || undefined,
     taxRate: row.taxRate || undefined,
     taxAmount: row.taxAmount || undefined,
+    isManualTax: row.isManualTax,
   });
   return {
     ...row,
@@ -159,21 +164,20 @@ export default function LedgerPage() {
       return;
     }
     setSaving(true);
-    let successCount = 0;
     try {
-      for (const row of validRows) {
+      const payload = validRows.map((row, index) => {
         const money = calculateMoney({
           quantity: row.quantity || undefined,
           unitPrice: row.unitPrice || undefined,
           supplyAmount: row.supplyAmount || undefined,
           taxRate: row.taxRate || undefined,
           taxAmount: row.taxAmount || undefined,
+          isManualTax: row.isManualTax,
         });
         if (money.fieldErrors.length > 0) {
-          throw new Error(`계산 오류: ${money.fieldErrors.join(", ")}`);
+          throw new Error(`행 ${index + 1} 계산 오류: ${money.fieldErrors.join(", ")}`);
         }
-
-        const payload = {
+        return {
           companyId,
           siteId,
           costCategoryId: categoryId,
@@ -184,20 +188,21 @@ export default function LedgerPage() {
           supplyAmount: money.supplyAmount,
           taxRate: row.taxRate || undefined,
           taxAmount: money.taxAmount,
+          isManualTax: row.isManualTax,
           description: row.description || undefined,
         };
-        const res = await fetch("/api/ledger", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(`저장 실패: ${err.error || "알 수 없는 오류"}`);
-        }
-        successCount++;
+      });
+
+      const res = await fetch("/api/ledger", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(`저장 실패: ${err.error || "알 수 없는 오류"}`);
       }
-      alert(`${successCount}건이 저장되었습니다.`);
+      alert(`${validRows.length}건이 저장되었습니다.`);
       window.localStorage.removeItem(storageKey);
       setRows(Array.from({ length: 12 }, blank));
       setRestored(false);
@@ -208,7 +213,7 @@ export default function LedgerPage() {
     }
   };
 
-  const update = (rowIndex: number, field: keyof Row, value: string) =>
+  const update = (rowIndex: number, field: keyof Row, value: string | boolean) =>
     setRows((current) =>
       current.map((row, index) =>
         index === rowIndex
@@ -217,6 +222,9 @@ export default function LedgerPage() {
               [field]: value,
               ...(field === "quantity" || field === "unitPrice"
                 ? { supplyAmount: "" }
+                : {}),
+              ...(field === "taxRate" && !row.isManualTax
+                ? { taxAmount: "" }
                 : {}),
             })
           : row,
@@ -248,7 +256,9 @@ export default function LedgerPage() {
         const updated = { ...next[rowIndex + offset] };
         line.forEach((value, column) => {
           const target = fields[start + column];
-          if (target) updated[target] = value.trim();
+          if (target && target !== "isManualTax") {
+            updated[target] = value.trim() as never;
+          }
         });
         next[rowIndex + offset] = recalculate(updated);
       });
@@ -366,23 +376,35 @@ export default function LedgerPage() {
               <tr key={rowIndex}>
                 {fields.map((field) => (
                   <td key={field}>
-                    <input
-                      data-cell={`${rowIndex}-${field}`}
-                      value={row[field]}
-                      aria-label={`${rowIndex + 1}행 ${labels[field]}`}
-                      onChange={(event) => update(rowIndex, field, event.target.value)}
-                      onPaste={(event) => paste(event, rowIndex, field)}
-                      onKeyDown={(event) => moveNext(event, rowIndex, field)}
-                      inputMode={
-                        field === "quantity" ||
-                        field === "unitPrice" ||
-                        field === "supplyAmount" ||
-                        field === "taxRate" ||
-                        field === "taxAmount"
-                          ? "decimal"
-                          : undefined
-                      }
-                    />
+                    {field === "isManualTax" ? (
+                      <input
+                        type="checkbox"
+                        checked={row[field]}
+                        onChange={(e) => update(rowIndex, field, e.target.checked)}
+                      />
+                    ) : (
+                      <input
+                        data-cell={`${rowIndex}-${field}`}
+                        value={row[field] as string}
+                        aria-label={`${rowIndex + 1}행 ${labels[field]}`}
+                        onChange={(event) => update(rowIndex, field, event.target.value)}
+                        onPaste={(event) => paste(event, rowIndex, field)}
+                        onKeyDown={(event) => moveNext(event, rowIndex, field)}
+                        readOnly={field === "taxAmount" && !row.isManualTax}
+                        style={{
+                          backgroundColor: field === "taxAmount" && !row.isManualTax ? "#f1f5f9" : "transparent"
+                        }}
+                        inputMode={
+                          field === "quantity" ||
+                          field === "unitPrice" ||
+                          field === "supplyAmount" ||
+                          field === "taxRate" ||
+                          field === "taxAmount"
+                            ? "decimal"
+                            : undefined
+                        }
+                      />
+                    )}
                   </td>
                 ))}
                 <td className={styles.readonly}>{row.totalAmount}</td>

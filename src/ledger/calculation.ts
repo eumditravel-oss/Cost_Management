@@ -4,6 +4,7 @@ export type MoneyCalculationInput = {
   supplyAmount?: string | null;
   taxRate?: string | null;
   taxAmount?: string | null;
+  isManualTax?: boolean;
 };
 export type MoneyCalculation = {
   supplyAmount: string;
@@ -48,8 +49,8 @@ export function calculateMoney(input: MoneyCalculationInput): MoneyCalculation {
     errors.push("quantityOrUnitPrice");
   }
   try {
-    if (input.taxAmount) tax = scaled(input.taxAmount, 2);
-    else if (input.taxRate)
+    if (input.isManualTax && input.taxAmount != null) tax = scaled(input.taxAmount, 2);
+    else if (input.taxRate != null)
       tax = roundDivide(supply * scaled(input.taxRate, 4), BigInt(1000000));
   } catch {
     errors.push("taxAmountOrTaxRate");

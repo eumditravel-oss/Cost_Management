@@ -11,6 +11,19 @@ describe("central money calculation", () => {
     }));
   it("uses an explicitly entered supply amount when quantity inputs are absent", () =>
     expect(
-      calculateMoney({ supplyAmount: "12.34", taxAmount: "0.66" }).totalAmount,
+      calculateMoney({
+        supplyAmount: "12.34",
+        taxAmount: "0.66",
+        isManualTax: true,
+      }).totalAmount,
     ).toBe("13.00"));
+
+  it("ignores taxAmount and calculates from taxRate if isManualTax is false", () =>
+    expect(
+      calculateMoney({
+        supplyAmount: "100.00",
+        taxAmount: "99.99",
+        taxRate: "10.0000",
+      }).taxAmount,
+    ).toBe("10.00"));
 });
