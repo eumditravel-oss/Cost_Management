@@ -3,7 +3,14 @@ import { z } from "zod";
 import { getCurrentIdentity } from "@/auth/identity";
 import { hasPermission } from "@/auth/authorization";
 import { createDatabase } from "@/db/client";
-import { costEntries, costEntryAuditLogs, sites, costCategories } from "@/db/schema";
+import {
+  costEntries,
+  costEntryAuditLogs,
+  sites,
+  costCategories,
+  userCompanyMemberships,
+  userSiteMemberships,
+} from "@/db/schema";
 import { calculateMoney } from "@/ledger/calculation";
 
 const entry = z.object({
@@ -22,31 +29,75 @@ const entry = z.object({
 });
 const batchRequest = z.array(entry).min(1).max(100);
 
-async function identity() {
+async function requirePermission(permission: "ledger.read" | "ledger.write") {
   const current = await getCurrentIdentity();
   if (!current) return null;
-  return hasPermission(current, "master_data.write") ? current : false;
+  return hasPermission(current, permission) ? current : false;
 }
 
 export async function GET(request: Request) {
-  const current = await identity();
+  const current = await requirePermission("ledger.read");
   if (!current)
     return Response.json(
       { error: current === null ? "UNAUTHENTICATED" : "FORBIDDEN" },
       { status: current === null ? 401 : 403 },
     );
   const companyId = new URL(request.url).searchParams.get("companyId");
-  if (!companyId)
+  if (!companyId || !z.string().uuid().safeParse(companyId).success)
     return Response.json({ error: "COMPANY_ID_REQUIRED" }, { status: 400 });
   const { client, database } = createDatabase();
   try {
+    const companyScope = await database
+      .select({
+        id: userCompanyMemberships.id,
+        scope: userCompanyMemberships.siteAccessScope,
+      })
+      .from(userCompanyMemberships)
+      .where(
+        and(
+          eq(userCompanyMemberships.userId, current.userId),
+          eq(userCompanyMemberships.companyId, companyId),
+          eq(userCompanyMemberships.status, "active"),
+        ),
+      );
+
+    if (companyScope.length === 0) {
+      return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
+    }
+
+    const scope = companyScope[0].scope;
+    let allowedSiteIds: string[] | null = null;
+
+    if (scope === "selected_sites") {
+      const siteScopes = await database
+        .select({ siteId: userSiteMemberships.siteId })
+        .from(userSiteMemberships)
+        .where(
+          and(
+            eq(userSiteMemberships.companyMembershipId, companyScope[0].id),
+            eq(userSiteMemberships.status, "active"),
+          ),
+        );
+      allowedSiteIds = siteScopes.map((s) => s.siteId);
+      if (allowedSiteIds.length === 0) {
+        return Response.json({ records: [] });
+      }
+    }
+
+    const query = database
+      .select()
+      .from(costEntries)
+      .where(
+        and(
+          eq(costEntries.companyId, companyId),
+          allowedSiteIds ? inArray(costEntries.siteId, allowedSiteIds) : undefined,
+        ),
+      )
+      .orderBy(desc(costEntries.occurredOn))
+      .limit(200);
+
     return Response.json({
-      records: await database
-        .select()
-        .from(costEntries)
-        .where(eq(costEntries.companyId, companyId))
-        .orderBy(desc(costEntries.occurredOn))
-        .limit(200),
+      records: await query,
     });
   } finally {
     await client.end({ timeout: 5 });
@@ -54,7 +105,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const current = await identity();
+  const current = await requirePermission("ledger.write");
   if (!current)
     return Response.json(
       { error: current === null ? "UNAUTHENTICATED" : "FORBIDDEN" },
@@ -109,6 +160,42 @@ export async function POST(request: Request) {
 
   const { client, database } = createDatabase();
   try {
+    const companyScope = await database
+      .select({
+        id: userCompanyMemberships.id,
+        scope: userCompanyMemberships.siteAccessScope,
+      })
+      .from(userCompanyMemberships)
+      .where(
+        and(
+          eq(userCompanyMemberships.userId, current.userId),
+          eq(userCompanyMemberships.companyId, companyId),
+          eq(userCompanyMemberships.status, "active"),
+        ),
+      );
+
+    if (companyScope.length === 0) {
+      return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
+    }
+
+    const scope = companyScope[0].scope;
+    if (scope === "selected_sites") {
+      const siteScopes = await database
+        .select({ siteId: userSiteMemberships.siteId })
+        .from(userSiteMemberships)
+        .where(
+          and(
+            eq(userSiteMemberships.companyMembershipId, companyScope[0].id),
+            eq(userSiteMemberships.status, "active"),
+          ),
+        );
+      const allowedSiteIds = new Set(siteScopes.map((s) => s.siteId));
+      for (const b of batch) {
+        if (!allowedSiteIds.has(b.siteId)) {
+          return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
+        }
+      }
+    }
     const siteIds = Array.from(new Set(batch.map((b) => b.siteId)));
     const categoryIds = Array.from(new Set(batch.map((b) => b.costCategoryId)));
 
