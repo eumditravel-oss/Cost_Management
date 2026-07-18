@@ -97,7 +97,7 @@ describe("Preferences Schemas", () => {
       "quantity",
       "unitPrice",
       "supplyAmount",
-      "taxRate",
+      "entryStatus",
       "taxAmount",
       "totalAmount",
       "description",

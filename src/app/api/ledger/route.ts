@@ -130,21 +130,33 @@ export async function GET(request: Request) {
     }
 
     const query = database
-      .select()
+      .select({
+        entry: costEntries,
+        siteName: sites.name,
+        costCategoryName: costCategories.name,
+      })
       .from(costEntries)
+      .leftJoin(sites, eq(costEntries.siteId, sites.id))
+      .leftJoin(costCategories, eq(costEntries.costCategoryId, costCategories.id))
       .where(and(...conditions))
       .orderBy(desc(costEntries.occurredOn), desc(costEntries.id))
       .limit(limit + 1);
 
-    const result = await query;
+    const resultRows = await query;
     let nextCursor: string | null = null;
-    if (result.length > limit) {
-      const lastRecord = result[limit - 1];
-      nextCursor = `${lastRecord.occurredOn}_${lastRecord.id}`;
-      result.pop();
+    if (resultRows.length > limit) {
+      const lastRow = resultRows[limit - 1];
+      nextCursor = `${lastRow.entry.occurredOn}_${lastRow.entry.id}`;
+      resultRows.pop();
     }
 
-    return Response.json({ records: result, nextCursor });
+    const records = resultRows.map((row) => ({
+      ...row.entry,
+      siteName: row.siteName,
+      costCategoryName: row.costCategoryName,
+    }));
+
+    return Response.json({ records, nextCursor });
   } finally {
     await client.end({ timeout: 5 });
   }

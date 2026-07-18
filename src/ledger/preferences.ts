@@ -8,10 +8,10 @@ const allowedColumns = [
   "quantity",
   "unitPrice",
   "supplyAmount",
-  "taxRate",
   "taxAmount",
   "totalAmount",
   "description",
+  "entryStatus",
 ] as const;
 
 export const savedFiltersSchema = z

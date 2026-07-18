@@ -19,11 +19,15 @@ vi.mock("@/db/client", () => ({
   createDatabase: vi.fn(() => ({
     client: { end: vi.fn() },
     database: {
-      select: () => ({
-        from: () => ({
+      select: () => {
+        const fromChain = {
+          leftJoin: () => fromChain,
           where: mockWhere,
-        }),
-      }),
+        };
+        return {
+          from: () => fromChain,
+        };
+      },
       transaction: mockTransaction,
     },
   })),
@@ -88,7 +92,9 @@ describe("Ledger API Scope and Permissions", () => {
         (_user, perm) => perm === "ledger.read",
       );
       mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]); // company scope
-      mockLimit.mockResolvedValueOnce([{ id: "record-1" }]); // get records
+      mockLimit.mockResolvedValueOnce([
+        { entry: { id: "record-1" }, siteName: "Site 1", costCategoryName: "Cat 1" },
+      ]); // get records
       const resGet = await GET(
         createGetRequest("00000000-0000-4000-8000-000000000001"),
       );
@@ -162,7 +168,9 @@ describe("Ledger API Scope and Permissions", () => {
 
     it("GET: all_sites returns all company records", async () => {
       mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]); // companyScope
-      mockLimit.mockResolvedValueOnce([{ id: "record-1" }]); // query
+      mockLimit.mockResolvedValueOnce([
+        { entry: { id: "record-1" }, siteName: "Site 1", costCategoryName: "Cat 1" },
+      ]); // query
       const res = await GET(createGetRequest("00000000-0000-4000-8000-000000000001"));
       expect(res.status).toBe(200);
       expect((await res.json()).records).toHaveLength(1);
@@ -172,7 +180,9 @@ describe("Ledger API Scope and Permissions", () => {
       mockWhere
         .mockResolvedValueOnce([{ id: "m-1", scope: "selected_sites" }]) // companyScope
         .mockResolvedValueOnce([{ siteId: "site-1" }, { siteId: "site-2" }]); // siteScopes
-      mockLimit.mockResolvedValueOnce([{ id: "record-1" }]); // query
+      mockLimit.mockResolvedValueOnce([
+        { entry: { id: "record-1" }, siteName: "Site 1", costCategoryName: "Cat 1" },
+      ]); // query
       const res = await GET(createGetRequest("00000000-0000-4000-8000-000000000001"));
       expect(res.status).toBe(200);
       expect((await res.json()).records).toHaveLength(1);
@@ -312,9 +322,30 @@ describe("Ledger API Scope and Permissions", () => {
     it("returns records and nextCursor if limit is exceeded", async () => {
       mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
       mockLimit.mockResolvedValueOnce([
-        { id: "00000000-0000-4000-8000-00000000000a", occurredOn: "2023-01-03" },
-        { id: "00000000-0000-4000-8000-00000000000b", occurredOn: "2023-01-02" },
-        { id: "00000000-0000-4000-8000-00000000000c", occurredOn: "2023-01-01" },
+        {
+          entry: {
+            id: "00000000-0000-4000-8000-00000000000a",
+            occurredOn: "2023-01-03",
+          },
+          siteName: "Site A",
+          costCategoryName: "Cat A",
+        },
+        {
+          entry: {
+            id: "00000000-0000-4000-8000-00000000000b",
+            occurredOn: "2023-01-02",
+          },
+          siteName: "Site B",
+          costCategoryName: "Cat B",
+        },
+        {
+          entry: {
+            id: "00000000-0000-4000-8000-00000000000c",
+            occurredOn: "2023-01-01",
+          },
+          siteName: "Site C",
+          costCategoryName: "Cat C",
+        },
       ]);
       const res = await GET(
         new Request(
@@ -330,7 +361,14 @@ describe("Ledger API Scope and Permissions", () => {
     it("returns nextCursor = null if limit is not exceeded", async () => {
       mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
       mockLimit.mockResolvedValueOnce([
-        { id: "00000000-0000-4000-8000-00000000000a", occurredOn: "2023-01-03" },
+        {
+          entry: {
+            id: "00000000-0000-4000-8000-00000000000a",
+            occurredOn: "2023-01-03",
+          },
+          siteName: "Site A",
+          costCategoryName: "Cat A",
+        },
       ]);
       const res = await GET(
         new Request(
@@ -363,6 +401,45 @@ describe("Ledger API Scope and Permissions", () => {
         ),
       );
       expect(res.status).toBe(200);
+    });
+
+    it("returns correct response structure with siteName and costCategoryName", async () => {
+      mockWhere.mockResolvedValueOnce([{ id: "m-1", scope: "all_sites" }]);
+      mockLimit.mockResolvedValueOnce([
+        {
+          entry: { id: "record-1", occurredOn: "2023-01-01", itemName: "Coffee" },
+          siteName: "HQ",
+          costCategoryName: "Meals",
+        },
+        {
+          entry: { id: "record-2", occurredOn: "2023-01-02", itemName: "Taxi" },
+          siteName: null,
+          costCategoryName: null,
+        },
+      ]);
+
+      const res = await GET(
+        new Request(
+          "http://localhost/api/ledger?companyId=00000000-0000-4000-8000-000000000001",
+        ),
+      );
+      expect(res.status).toBe(200);
+      const data = await res.json();
+      expect(data.records).toHaveLength(2);
+      expect(data.records[0]).toEqual({
+        id: "record-1",
+        occurredOn: "2023-01-01",
+        itemName: "Coffee",
+        siteName: "HQ",
+        costCategoryName: "Meals",
+      });
+      expect(data.records[1]).toEqual({
+        id: "record-2",
+        occurredOn: "2023-01-02",
+        itemName: "Taxi",
+        siteName: null,
+        costCategoryName: null,
+      });
     });
   });
 
