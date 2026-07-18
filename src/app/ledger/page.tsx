@@ -139,7 +139,6 @@ export default function LedgerPage() {
     if (!companyId) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setSites([]);
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCategories([]);
       return;
     }
@@ -223,9 +222,7 @@ export default function LedgerPage() {
               ...(field === "quantity" || field === "unitPrice"
                 ? { supplyAmount: "" }
                 : {}),
-              ...(field === "taxRate" && !row.isManualTax
-                ? { taxAmount: "" }
-                : {}),
+              ...(field === "taxRate" && !row.isManualTax ? { taxAmount: "" } : {}),
             })
           : row,
       ),
@@ -387,12 +384,17 @@ export default function LedgerPage() {
                         data-cell={`${rowIndex}-${field}`}
                         value={row[field] as string}
                         aria-label={`${rowIndex + 1}행 ${labels[field]}`}
-                        onChange={(event) => update(rowIndex, field, event.target.value)}
+                        onChange={(event) =>
+                          update(rowIndex, field, event.target.value)
+                        }
                         onPaste={(event) => paste(event, rowIndex, field)}
                         onKeyDown={(event) => moveNext(event, rowIndex, field)}
                         readOnly={field === "taxAmount" && !row.isManualTax}
                         style={{
-                          backgroundColor: field === "taxAmount" && !row.isManualTax ? "#f1f5f9" : "transparent"
+                          backgroundColor:
+                            field === "taxAmount" && !row.isManualTax
+                              ? "#f1f5f9"
+                              : "transparent",
                         }}
                         inputMode={
                           field === "quantity" ||

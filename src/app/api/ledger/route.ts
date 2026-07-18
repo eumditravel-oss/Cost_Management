@@ -82,7 +82,10 @@ export async function POST(request: Request) {
   }
   const companyId = companyIds[0];
 
-  const processedBatch: { value: z.infer<typeof entry>; money: ReturnType<typeof calculateMoney> }[] = [];
+  const processedBatch: {
+    value: z.infer<typeof entry>;
+    money: ReturnType<typeof calculateMoney>;
+  }[] = [];
   for (let i = 0; i < batch.length; i++) {
     const value = batch[i];
     const money = calculateMoney({
@@ -131,7 +134,12 @@ export async function POST(request: Request) {
     const categoriesCompanyCheck = await database
       .select({ id: costCategories.id })
       .from(costCategories)
-      .where(and(eq(costCategories.companyId, companyId), inArray(costCategories.id, categoryIds)));
+      .where(
+        and(
+          eq(costCategories.companyId, companyId),
+          inArray(costCategories.id, categoryIds),
+        ),
+      );
     if (categoriesCompanyCheck.length !== categoryIds.length) {
       return Response.json({ error: "INVALID_CATEGORY_FOR_COMPANY" }, { status: 400 });
     }
@@ -177,7 +185,10 @@ export async function POST(request: Request) {
       return Response.json({ error: "INVALID_SITE_FOR_COMPANY" }, { status: 400 });
     }
     if (
-      (error && typeof error === "object" && "code" in error && (error as { code: unknown }).code === "23505") ||
+      (error &&
+        typeof error === "object" &&
+        "code" in error &&
+        (error as { code: unknown }).code === "23505") ||
       String(error).includes("unique constraint")
     ) {
       return Response.json({ error: "CONFLICT" }, { status: 409 });
