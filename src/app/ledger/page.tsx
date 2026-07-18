@@ -2,21 +2,27 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { calculateMoney } from "@/ledger/calculation";
-import { validateRow, findDuplicateCandidates, Candidate } from "@/ledger/review";
+import {
+  validateRow,
+  findDuplicateCandidates,
+  Candidate,
+  LedgerRow,
+} from "@/ledger/review";
+import {
+  loadDraft,
+  saveDraft,
+  clearDraft,
+  DraftState,
+  Template,
+  getTemplates,
+  saveTemplate,
+  deleteTemplate,
+  getRecentItems,
+  addRecentItems,
+} from "@/ledger/storage";
 import styles from "./page.module.css";
 
-type Row = {
-  occurredOn: string;
-  itemName: string;
-  quantity: string;
-  unitPrice: string;
-  supplyAmount: string;
-  taxRate: string;
-  isManualTax: boolean;
-  taxAmount: string;
-  totalAmount: string;
-  description: string;
-};
+type Row = LedgerRow;
 const fields: (keyof Row)[] = [
   "occurredOn",
   "itemName",
@@ -53,7 +59,6 @@ const blank = (): Row => ({
   totalAmount: "0.00",
   description: "",
 });
-const storageKey = "cost-ledger-draft-v1";
 const masterDataStorageKey = "cost-ledger-master-data-v1";
 
 function recalculate(row: Row): Row {
@@ -75,7 +80,6 @@ function recalculate(row: Row): Row {
 
 export default function LedgerPage() {
   const [rows, setRows] = useState<Row[]>(() => Array.from({ length: 12 }, blank));
-  const [restored, setRestored] = useState(false);
   const total = useMemo(
     () => rows.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0).toFixed(2),
     [rows],
@@ -91,25 +95,26 @@ export default function LedgerPage() {
   const [candidatesSource, setCandidatesSource] = useState<Candidate[]>([]);
   const [saving, setSaving] = useState(false);
 
+  const [draftAvailable, setDraftAvailable] = useState<DraftState | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [recentItems, setRecentItems] = useState<string[]>([]);
+
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved) as Row[];
-        if (Array.isArray(parsed)) {
-          // eslint-disable-next-line react-hooks/set-state-in-effect
-          setRows([
-            ...parsed,
-            ...Array.from({ length: Math.max(0, 12 - parsed.length) }, blank),
-          ]);
-          setRestored(true);
-        }
-      } catch {
-        window.localStorage.removeItem(storageKey);
-      }
+    const draft = loadDraft();
+    if (draft) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setDraftAvailable(draft);
     }
+
+    setTemplates(getTemplates());
+    setRecentItems(getRecentItems());
+
     const savedMaster = window.localStorage.getItem(masterDataStorageKey);
-    if (savedMaster) {
+    if (savedMaster && !draft) {
+      // Only set master data from previous if we aren't showing a draft prompt, otherwise wait for draft restore
       try {
         const parsed = JSON.parse(savedMaster);
         if (parsed.companyId) setCompanyId(parsed.companyId);
@@ -126,16 +131,20 @@ export default function LedgerPage() {
       .catch(() => {});
   }, []);
 
+  // Autosave
   useEffect(() => {
+    if (draftAvailable) return; // Do not autosave while prompting for draft recovery
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem(storageKey, JSON.stringify(rows));
+      const ts = Date.now();
+      saveDraft({ rows, companyId, siteId, categoryId, timestamp: ts });
+      setLastSavedAt(ts);
       window.localStorage.setItem(
         masterDataStorageKey,
         JSON.stringify({ companyId, siteId, categoryId }),
       );
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [rows, companyId, siteId, categoryId]);
+  }, [rows, companyId, siteId, categoryId, draftAvailable]);
 
   useEffect(() => {
     if (!companyId) {
@@ -158,6 +167,74 @@ export default function LedgerPage() {
       .then((d) => setCandidatesSource(d.records || []))
       .catch(() => {});
   }, [companyId]);
+
+  const handleRestoreDraft = () => {
+    if (!draftAvailable) return;
+    setRows([
+      ...draftAvailable.rows,
+      ...Array.from({ length: Math.max(0, 12 - draftAvailable.rows.length) }, blank),
+    ]);
+    setCompanyId(draftAvailable.companyId);
+    setSiteId(draftAvailable.siteId);
+    setCategoryId(draftAvailable.categoryId);
+    setDraftAvailable(null);
+  };
+
+  const handleDiscardDraft = () => {
+    clearDraft();
+    setDraftAvailable(null);
+  };
+
+  const handleSaveTemplate = () => {
+    const name = window.prompt("템플릿 이름을 입력하세요:");
+    if (!name) return;
+    const meaningfulRows = rows.filter(
+      (r) => r.occurredOn || r.itemName || r.supplyAmount,
+    );
+    const newTemplate: Template = {
+      id: Date.now().toString(),
+      name,
+      companyId,
+      siteId,
+      categoryId,
+      rows: meaningfulRows,
+    };
+    saveTemplate(newTemplate);
+    setTemplates(getTemplates());
+    setSelectedTemplateId(newTemplate.id);
+  };
+
+  const handleLoadTemplate = () => {
+    if (!selectedTemplateId) return;
+    const t = templates.find((x) => x.id === selectedTemplateId);
+    if (!t) return;
+
+    const hasData = rows.some((r) => r.occurredOn || r.itemName || r.supplyAmount);
+    if (hasData) {
+      if (
+        !window.confirm(
+          "현재 입력된 내용이 삭제되고 템플릿으로 덮어쓰여집니다. 계속하시겠습니까?",
+        )
+      )
+        return;
+    }
+    setRows([
+      ...t.rows,
+      ...Array.from({ length: Math.max(0, 12 - t.rows.length) }, blank),
+    ]);
+    setCompanyId(t.companyId);
+    setSiteId(t.siteId);
+    setCategoryId(t.categoryId);
+  };
+
+  const handleDeleteTemplate = () => {
+    if (!selectedTemplateId) return;
+    if (window.confirm("템플릿을 삭제하시겠습니까? (현재 브라우저에서만 삭제됩니다)")) {
+      deleteTemplate(selectedTemplateId);
+      setTemplates(getTemplates());
+      setSelectedTemplateId("");
+    }
+  };
 
   const handleSave = async () => {
     if (!companyId || !siteId || !categoryId) {
@@ -211,10 +288,14 @@ export default function LedgerPage() {
       if (data.records) {
         setCandidatesSource((prev) => [...data.records, ...prev]);
       }
+
+      const newRecentItems = addRecentItems(validRows.map((r) => r.itemName));
+      setRecentItems(newRecentItems);
+
       alert(`${validRows.length}건이 저장되었습니다.`);
-      window.localStorage.removeItem(storageKey);
+      clearDraft();
       setRows(Array.from({ length: 12 }, blank));
-      setRestored(false);
+      setLastSavedAt(null);
     } catch (e) {
       alert(e instanceof Error ? e.message : String(e));
     } finally {
@@ -285,17 +366,63 @@ export default function LedgerPage() {
       .querySelector<HTMLInputElement>(`[data-cell="${nextRow}-${nextField}"]`)
       ?.focus();
   };
+
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  };
+
   return (
     <main className={styles.page}>
       <header>
         <p className={styles.eyebrow}>Phase 12 · 임시저장 입력 화면</p>
         <h1>통합 원가 원장</h1>
-        <p>
-          {restored
-            ? "이전 임시입력을 복구했습니다."
-            : "입력 내용은 이 브라우저에 자동 임시저장됩니다."}
-        </p>
+        <p>입력 내용은 이 브라우저에 자동 임시저장됩니다.</p>
       </header>
+
+      {draftAvailable && (
+        <div className={styles.draftBanner}>
+          이전에 자동 임시저장된 내용이 있습니다. (
+          {formatTime(draftAvailable.timestamp)})
+          <button className={styles.primary} onClick={handleRestoreDraft}>
+            복구
+          </button>
+          <button onClick={handleDiscardDraft}>폐기</button>
+        </div>
+      )}
+
+      <section className={styles.templateBar}>
+        <select
+          value={selectedTemplateId}
+          onChange={(e) => setSelectedTemplateId(e.target.value)}
+        >
+          <option value="">템플릿 선택...</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={handleLoadTemplate}
+          disabled={!selectedTemplateId}
+        >
+          불러오기
+        </button>
+        <button
+          type="button"
+          onClick={handleDeleteTemplate}
+          disabled={!selectedTemplateId}
+        >
+          삭제
+        </button>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={handleSaveTemplate}>
+          현재 내용을 템플릿으로 저장
+        </button>
+      </section>
+
       <section className={styles.toolbar}>
         <select
           value={companyId}
@@ -337,6 +464,13 @@ export default function LedgerPage() {
             </option>
           ))}
         </select>
+
+        {lastSavedAt && (
+          <span className={styles.lastSaved}>
+            마지막 저장: {formatTime(lastSavedAt)}
+          </span>
+        )}
+
         <div style={{ flex: 1 }} />
         <button
           type="button"
@@ -347,9 +481,9 @@ export default function LedgerPage() {
         <button
           type="button"
           onClick={() => {
-            window.localStorage.removeItem(storageKey);
+            clearDraft();
             setRows(Array.from({ length: 12 }, blank));
-            setRestored(false);
+            setLastSavedAt(null);
           }}
         >
           임시입력 비우기
@@ -369,6 +503,13 @@ export default function LedgerPage() {
         </button>
         <strong>합계 {total}</strong>
       </section>
+
+      <datalist id="recent-item-names">
+        {recentItems.map((item) => (
+          <option key={item} value={item} />
+        ))}
+      </datalist>
+
       <div className={styles.gridWrap}>
         <table>
           <thead>
@@ -405,6 +546,7 @@ export default function LedgerPage() {
                         <input
                           data-cell={`${rowIndex}-${field}`}
                           value={row[field] as string}
+                          list={field === "itemName" ? "recent-item-names" : undefined}
                           aria-label={`${rowIndex + 1}행 ${labels[field]}`}
                           aria-invalid={
                             errorFields.includes(field) ? "true" : undefined
@@ -460,6 +602,9 @@ export default function LedgerPage() {
         공급가액은 수량과 단가 입력 시 자동 계산됩니다.
         <br />
         중복 확인은 최근 저장된 200건 내에서만 이루어지며 기술적 주의 알림입니다.
+        <br />※ 자동 임시저장, 입력 템플릿, 최근 품명 기능은 현재 사용 중인 브라우저
+        내에서만 보관(최대 100건 등 기술적 제한 있음)되며 서버로 전송되지 않습니다.
+        브라우저 캐시 삭제 시 소실될 수 있습니다.
       </p>
     </main>
   );
