@@ -49,9 +49,15 @@ export function calculateMoney(input: MoneyCalculationInput): MoneyCalculation {
     errors.push("quantityOrUnitPrice");
   }
   try {
-    if (input.isManualTax && input.taxAmount != null) tax = scaled(input.taxAmount, 2);
-    else if (input.taxRate != null)
+    if (input.isManualTax) {
+      if (input.taxAmount != null && input.taxAmount !== "") {
+        tax = scaled(input.taxAmount, 2);
+      } else {
+        errors.push("taxAmount");
+      }
+    } else if (input.taxRate != null && input.taxRate !== "") {
       tax = roundDivide(supply * scaled(input.taxRate, 4), BigInt(1000000));
+    }
   } catch {
     errors.push("taxAmountOrTaxRate");
   }

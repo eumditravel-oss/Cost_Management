@@ -118,7 +118,7 @@ export async function POST(request: Request) {
     for (const sid of siteIds) {
       if (!siteMap.has(sid)) throw new Error("INVALID_SITE_FOR_COMPANY");
     }
-    
+
     // Check companyId matches
     const sitesCompanyCheck = await database
       .select({ id: sites.id })
