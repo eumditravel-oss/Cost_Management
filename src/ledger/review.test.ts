@@ -58,6 +58,41 @@ describe("validateRow", () => {
     );
   });
 
+  it("세액/세율 오류 시 모드별로 에러 표시 분리 (자동 세액 모드)", () => {
+    const row: LedgerRow = {
+      occurredOn: "2023-01-01",
+      itemName: "A",
+      supplyAmount: "100",
+      taxRate: "invalid",
+      isManualTax: false,
+    };
+    const errors = validateRow(row);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        field: "taxRate",
+        message: "세율 형식이 올바르지 않습니다.",
+      }),
+    );
+    expect(errors.find((e) => e.field === "taxAmount")).toBeUndefined();
+  });
+
+  it("세액/세율 오류 시 모드별로 에러 표시 분리 (수기 세액 모드)", () => {
+    const row: LedgerRow = {
+      occurredOn: "2023-01-01",
+      itemName: "A",
+      supplyAmount: "100",
+      taxAmount: "invalid",
+      isManualTax: true,
+    };
+    const errors = validateRow(row);
+    expect(errors).toContainEqual(
+      expect.objectContaining({
+        field: "taxAmount",
+        message: "세액 형식이 올바르지 않습니다.",
+      }),
+    );
+    expect(errors.find((e) => e.field === "taxRate")).toBeUndefined();
+  });
   it("정상 행은 에러 없음", () => {
     const row: LedgerRow = {
       occurredOn: "2023-01-01",
@@ -150,8 +185,8 @@ describe("findDuplicateCandidates", () => {
     expect(candidates[0].rowIndex).toBe(1);
   });
 
-  it("총액이 0.00이거나 미입력 상태면 후보 제외", () => {
-    const emptyRow: LedgerRow = {
+  it("총액이 0.00이라도 다른 기준이 완전 일치하면 후보로 탐지된다", () => {
+    const zeroRow: LedgerRow = {
       occurredOn: "2023-01-01",
       itemName: "Apple",
       totalAmount: "0.00",
@@ -167,7 +202,29 @@ describe("findDuplicateCandidates", () => {
         totalAmount: "0.00",
       },
     ];
-    const candidates = findDuplicateCandidates(emptyRow, 0, [], fetched, context);
-    expect(candidates).toHaveLength(0);
+    const candidates = findDuplicateCandidates(zeroRow, 0, [], fetched, context);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].id).toBe("1");
+  });
+
+  it("같은 세션에서 동일 거래를 다시 입력(저장 직후 후보 갱신된 상황 모사) 시 경고", () => {
+    // 저장 성공으로 fetchedRecords에 방금 저장한 내역이 추가된 상황
+    const savedRecord: Candidate = {
+      id: "new-saved-id",
+      companyId: "c1",
+      siteId: "s1",
+      costCategoryId: "cat1",
+      occurredOn: "2023-01-01",
+      itemName: "Apple",
+      totalAmount: "110",
+    };
+    const newRow: LedgerRow = {
+      occurredOn: "2023-01-01",
+      itemName: "Apple",
+      totalAmount: "110",
+    };
+    const candidates = findDuplicateCandidates(newRow, 0, [], [savedRecord], context);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].id).toBe("new-saved-id");
   });
 });

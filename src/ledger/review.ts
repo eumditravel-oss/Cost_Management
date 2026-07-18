@@ -48,8 +48,11 @@ export function validateRow(row: LedgerRow): RowError[] {
     errors.push({ field: "taxAmount", message: "수기 세액을 입력해주세요." });
   }
   if (money.fieldErrors.includes("taxAmountOrTaxRate")) {
-    errors.push({ field: "taxRate", message: "세율 형식이 올바르지 않습니다." });
-    errors.push({ field: "taxAmount", message: "세액 형식이 올바르지 않습니다." });
+    if (row.isManualTax) {
+      errors.push({ field: "taxAmount", message: "세액 형식이 올바르지 않습니다." });
+    } else {
+      errors.push({ field: "taxRate", message: "세율 형식이 올바르지 않습니다." });
+    }
   }
 
   return errors;
@@ -91,12 +94,7 @@ export function findDuplicateCandidates(
   fetchedRecords: Candidate[],
   context: CurrentContext,
 ): Candidate[] {
-  if (
-    !row.itemName ||
-    !row.occurredOn ||
-    !row.totalAmount ||
-    row.totalAmount === "0.00"
-  ) {
+  if (!row.itemName || !row.occurredOn || !row.totalAmount) {
     return [];
   }
 

@@ -204,9 +204,12 @@ export default function LedgerPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(`저장 실패: ${err.error || "알 수 없는 오류"}`);
+        throw new Error(`저장 실패: ${data.error || "알 수 없는 오류"}`);
+      }
+      if (data.records) {
+        setCandidatesSource((prev) => [...data.records, ...prev]);
       }
       alert(`${validRows.length}건이 저장되었습니다.`);
       window.localStorage.removeItem(storageKey);
@@ -455,6 +458,8 @@ export default function LedgerPage() {
       <p className={styles.help}>
         Enter로 다음 셀 이동 · Excel 범위를 붙여넣으면 시작 셀부터 여러 행에 반영 ·
         공급가액은 수량과 단가 입력 시 자동 계산됩니다.
+        <br />
+        중복 확인은 최근 저장된 200건 내에서만 이루어지며 기술적 주의 알림입니다.
       </p>
     </main>
   );
