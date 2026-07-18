@@ -16,6 +16,32 @@
 .page p {
   color: #5c6773;
 }
+.draftBanner {
+  max-width: 1200px;
+  margin: 0 auto 16px;
+  padding: 12px 16px;
+  background: #fffbeb;
+  border: 1px solid #fef3c7;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #92400e;
+  font-size: 14px;
+}
+.draftBanner button {
+  padding: 6px 12px;
+  border-radius: 4px;
+  border: 1px solid #d97706;
+  background: white;
+  color: #d97706;
+  cursor: pointer;
+  font-weight: 500;
+}
+.draftBanner button.primary {
+  background: #d97706;
+  color: white;
+}
 .eyebrow {
   margin: 0;
   color: #166534 !important;
@@ -28,16 +54,41 @@
   display: flex;
   gap: 8px;
   align-items: center;
+  flex-wrap: wrap;
 }
-.toolbar button {
+.templateBar {
+  max-width: 1200px;
+  margin: 0 auto 12px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+.templateBar select {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #cbd5e1;
+  min-width: 200px;
+}
+.toolbar button,
+.templateBar button {
   border: 1px solid #cbd5e1;
   background: white;
   border-radius: 6px;
   padding: 8px 12px;
   cursor: pointer;
+  font-size: 13px;
 }
 .toolbar strong {
   margin-left: auto;
+}
+.lastSaved {
+  font-size: 12px;
+  color: #64748b;
+  margin-left: 12px;
 }
 .gridWrap {
   max-width: 1200px;
