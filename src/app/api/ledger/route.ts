@@ -1,17 +1,11 @@
 import { desc, eq, inArray, and, gte, lte, like, lt, or } from "drizzle-orm";
 import { z } from "zod";
-import {
-  costEntries,
-  costEntryAuditLogs,
-  sites,
-  costCategories,
-  userCompanyMemberships,
-  userSiteMemberships,
-} from "@/db/schema";
+import { costEntries, costEntryAuditLogs, sites, costCategories } from "@/db/schema";
 import { calculateMoney } from "@/ledger/calculation";
 import { getCurrentIdentity } from "@/auth/identity";
 import { hasPermission } from "@/auth/authorization";
 import { createDatabase } from "@/db/client";
+import { checkUserSiteAccess } from "@/ledger/permissions";
 
 const entry = z.object({
   companyId: z.uuid(),
@@ -92,46 +86,18 @@ export async function GET(request: Request) {
 
   const { client, database } = createDatabase();
   try {
-    const companyScope = await database
-      .select({
-        id: userCompanyMemberships.id,
-        scope: userCompanyMemberships.siteAccessScope,
-      })
-      .from(userCompanyMemberships)
-      .where(
-        and(
-          eq(userCompanyMemberships.userId, current.userId),
-          eq(userCompanyMemberships.companyId, companyId),
-          eq(userCompanyMemberships.status, "active"),
-        ),
-      );
-
-    if (companyScope.length === 0) {
-      return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
+    const access = await checkUserSiteAccess(
+      database,
+      current.userId,
+      companyId,
+      siteId,
+    );
+    if (!access.allowed) {
+      return Response.json({ error: access.error }, { status: 403 });
     }
-
-    const scope = companyScope[0].scope;
-    let allowedSiteIds: string[] | null = null;
-
-    if (scope === "selected_sites") {
-      const siteScopes = await database
-        .select({ siteId: userSiteMemberships.siteId })
-        .from(userSiteMemberships)
-        .where(
-          and(
-            eq(userSiteMemberships.companyMembershipId, companyScope[0].id),
-            eq(userSiteMemberships.status, "active"),
-          ),
-        );
-      allowedSiteIds = siteScopes.map((s) => s.siteId);
-
-      if (siteId && !allowedSiteIds.includes(siteId)) {
-        return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
-      }
-
-      if (allowedSiteIds.length === 0) {
-        return Response.json({ records: [], nextCursor: null });
-      }
+    const allowedSiteIds = access.allowedSiteIds;
+    if (allowedSiteIds !== null && allowedSiteIds.length === 0) {
+      return Response.json({ records: [], nextCursor: null });
     }
 
     const conditions = [eq(costEntries.companyId, companyId)];
@@ -240,36 +206,14 @@ export async function POST(request: Request) {
 
   const { client, database } = createDatabase();
   try {
-    const companyScope = await database
-      .select({
-        id: userCompanyMemberships.id,
-        scope: userCompanyMemberships.siteAccessScope,
-      })
-      .from(userCompanyMemberships)
-      .where(
-        and(
-          eq(userCompanyMemberships.userId, current.userId),
-          eq(userCompanyMemberships.companyId, companyId),
-          eq(userCompanyMemberships.status, "active"),
-        ),
-      );
-
-    if (companyScope.length === 0) {
-      return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
+    const access = await checkUserSiteAccess(database, current.userId, companyId);
+    if (!access.allowed) {
+      return Response.json({ error: access.error }, { status: 403 });
     }
-
-    const scope = companyScope[0].scope;
-    if (scope === "selected_sites") {
-      const siteScopes = await database
-        .select({ siteId: userSiteMemberships.siteId })
-        .from(userSiteMemberships)
-        .where(
-          and(
-            eq(userSiteMemberships.companyMembershipId, companyScope[0].id),
-            eq(userSiteMemberships.status, "active"),
-          ),
-        );
-      const allowedSiteIds = new Set(siteScopes.map((s) => s.siteId));
+    const allowedSiteIds = access.allowedSiteIds
+      ? new Set(access.allowedSiteIds)
+      : null;
+    if (allowedSiteIds) {
       for (const b of batch) {
         if (!allowedSiteIds.has(b.siteId)) {
           return Response.json({ error: "SCOPE_FORBIDDEN" }, { status: 403 });
