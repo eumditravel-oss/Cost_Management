@@ -95,15 +95,13 @@ export async function POST(request: Request) {
           updatedByUserId: current.userId,
         })
         .returning();
-      await tx
-        .insert(costEntryAuditLogs)
-        .values({
-          id: crypto.randomUUID(),
-          costEntryId: id,
-          actorUserId: current.userId,
-          action: "create",
-          afterValue: created,
-        });
+      await tx.insert(costEntryAuditLogs).values({
+        id: crypto.randomUUID(),
+        costEntryId: id,
+        actorUserId: current.userId,
+        action: "create",
+        afterValue: created,
+      });
       return [created];
     });
     return Response.json({ record }, { status: 201 });

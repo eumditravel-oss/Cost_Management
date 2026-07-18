@@ -49,9 +49,16 @@ const blank = (): Row => ({
   description: "",
 });
 const storageKey = "cost-ledger-draft-v1";
+const masterDataStorageKey = "cost-ledger-master-data-v1";
 
 function recalculate(row: Row): Row {
-  const money = calculateMoney(row);
+  const money = calculateMoney({
+    quantity: row.quantity || undefined,
+    unitPrice: row.unitPrice || undefined,
+    supplyAmount: row.supplyAmount || undefined,
+    taxRate: row.taxRate || undefined,
+    taxAmount: row.taxAmount || undefined,
+  });
   return {
     ...row,
     supplyAmount: money.supplyAmount,
@@ -67,6 +74,16 @@ export default function LedgerPage() {
     () => rows.reduce((sum, row) => sum + Number(row.totalAmount || 0), 0).toFixed(2),
     [rows],
   );
+
+  const [companies, setCompanies] = useState<{ id: string; name: string }[]>([]);
+  const [sites, setSites] = useState<{ id: string; name: string }[]>([]);
+  const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
+
+  const [companyId, setCompanyId] = useState("");
+  const [siteId, setSiteId] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [saving, setSaving] = useState(false);
+
   useEffect(() => {
     const saved = window.localStorage.getItem(storageKey);
     if (saved) {
@@ -84,14 +101,113 @@ export default function LedgerPage() {
         window.localStorage.removeItem(storageKey);
       }
     }
+    const savedMaster = window.localStorage.getItem(masterDataStorageKey);
+    if (savedMaster) {
+      try {
+        const parsed = JSON.parse(savedMaster);
+        if (parsed.companyId) setCompanyId(parsed.companyId);
+        if (parsed.siteId) setSiteId(parsed.siteId);
+        if (parsed.categoryId) setCategoryId(parsed.categoryId);
+      } catch {
+        window.localStorage.removeItem(masterDataStorageKey);
+      }
+    }
+
+    fetch("/api/master-data/companies")
+      .then((r) => r.json())
+      .then((d) => setCompanies(d.records || []))
+      .catch(() => {});
   }, []);
+
   useEffect(() => {
-    const timer = window.setTimeout(
-      () => window.localStorage.setItem(storageKey, JSON.stringify(rows)),
-      500,
-    );
+    const timer = window.setTimeout(() => {
+      window.localStorage.setItem(storageKey, JSON.stringify(rows));
+      window.localStorage.setItem(
+        masterDataStorageKey,
+        JSON.stringify({ companyId, siteId, categoryId }),
+      );
+    }, 500);
     return () => window.clearTimeout(timer);
-  }, [rows]);
+  }, [rows, companyId, siteId, categoryId]);
+
+  useEffect(() => {
+    if (!companyId) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSites([]);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setCategories([]);
+      return;
+    }
+    fetch(`/api/master-data/sites?companyId=${companyId}`)
+      .then((r) => r.json())
+      .then((d) => setSites(d.records || []))
+      .catch(() => {});
+    fetch(`/api/master-data/cost-categories?companyId=${companyId}`)
+      .then((r) => r.json())
+      .then((d) => setCategories(d.records || []))
+      .catch(() => {});
+  }, [companyId]);
+
+  const handleSave = async () => {
+    if (!companyId || !siteId || !categoryId) {
+      alert("회사, 현장, 비용 분류를 선택해주세요.");
+      return;
+    }
+    const validRows = rows.filter((r) => r.occurredOn && r.itemName);
+    if (validRows.length === 0) {
+      alert("저장할 데이터가 없습니다.");
+      return;
+    }
+    setSaving(true);
+    let successCount = 0;
+    try {
+      for (const row of validRows) {
+        const money = calculateMoney({
+          quantity: row.quantity || undefined,
+          unitPrice: row.unitPrice || undefined,
+          supplyAmount: row.supplyAmount || undefined,
+          taxRate: row.taxRate || undefined,
+          taxAmount: row.taxAmount || undefined,
+        });
+        if (money.fieldErrors.length > 0) {
+          throw new Error(`계산 오류: ${money.fieldErrors.join(", ")}`);
+        }
+
+        const payload = {
+          companyId,
+          siteId,
+          costCategoryId: categoryId,
+          occurredOn: row.occurredOn,
+          itemName: row.itemName,
+          quantity: row.quantity || undefined,
+          unitPrice: row.unitPrice || undefined,
+          supplyAmount: money.supplyAmount,
+          taxRate: row.taxRate || undefined,
+          taxAmount: money.taxAmount,
+          description: row.description || undefined,
+        };
+        const res = await fetch("/api/ledger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(`저장 실패: ${err.error || "알 수 없는 오류"}`);
+        }
+        successCount++;
+      }
+      alert(`${successCount}건이 저장되었습니다.`);
+      window.localStorage.removeItem(storageKey);
+      setRows(Array.from({ length: 12 }, blank));
+      setRestored(false);
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const update = (rowIndex: number, field: keyof Row, value: string) =>
     setRows((current) =>
       current.map((row, index) =>
@@ -164,6 +280,47 @@ export default function LedgerPage() {
         </p>
       </header>
       <section className={styles.toolbar}>
+        <select
+          value={companyId}
+          onChange={(e) => {
+            setCompanyId(e.target.value);
+            setSiteId("");
+            setCategoryId("");
+          }}
+          style={{ padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+        >
+          <option value="">회사 선택</option>
+          {companies.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={siteId}
+          onChange={(e) => setSiteId(e.target.value)}
+          style={{ padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+        >
+          <option value="">현장 선택</option>
+          {sites.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={categoryId}
+          onChange={(e) => setCategoryId(e.target.value)}
+          style={{ padding: "8px", borderRadius: "6px", border: "1px solid #cbd5e1" }}
+        >
+          <option value="">비용 분류 선택</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        <div style={{ flex: 1 }} />
         <button
           type="button"
           onClick={() => setRows((current) => [...current, blank()])}
@@ -179,6 +336,19 @@ export default function LedgerPage() {
           }}
         >
           임시입력 비우기
+        </button>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving}
+          style={{
+            background: "#2563eb",
+            color: "white",
+            border: "none",
+            fontWeight: 600,
+          }}
+        >
+          {saving ? "저장 중..." : "저장"}
         </button>
         <strong>합계 {total}</strong>
       </section>
