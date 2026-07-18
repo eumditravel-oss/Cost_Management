@@ -5,6 +5,33 @@ export const STORAGE_KEY_TEMPLATES = "cost-ledger-templates-v1";
 export const STORAGE_KEY_RECENT_ITEMS = "cost-ledger-recent-items-v1";
 
 // ---------------------------
+// Helpers
+// ---------------------------
+function sanitizeRows(rows: unknown): LedgerRow[] {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .filter((r): r is Record<string, unknown> => r !== null && typeof r === "object")
+    .map((r) => ({
+      occurredOn: String(r.occurredOn || ""),
+      itemName: String(r.itemName || ""),
+      quantity: String(r.quantity || ""),
+      unitPrice: String(r.unitPrice || ""),
+      supplyAmount: String(r.supplyAmount || ""),
+      taxRate: String(r.taxRate || ""),
+      isManualTax: Boolean(r.isManualTax),
+      taxAmount: String(r.taxAmount || ""),
+      totalAmount: String(r.totalAmount || "0.00"),
+      description: String(r.description || ""),
+    }));
+}
+
+function hasMeaningfulInput(rows: LedgerRow[]): boolean {
+  return rows.some(
+    (r) => r.occurredOn || r.itemName || r.supplyAmount || r.description,
+  );
+}
+
+// ---------------------------
 // Draft Management
 // ---------------------------
 export type DraftState = {
@@ -17,6 +44,10 @@ export type DraftState = {
 
 export function saveDraft(state: DraftState): void {
   try {
+    if (!hasMeaningfulInput(state.rows)) {
+      clearDraft();
+      return;
+    }
     window.localStorage.setItem(STORAGE_KEY_DRAFT, JSON.stringify(state));
   } catch {
     // Ignore quota errors or disabled localStorage
@@ -28,8 +59,17 @@ export function loadDraft(): DraftState | null {
     const rawV2 = window.localStorage.getItem(STORAGE_KEY_DRAFT);
     if (rawV2) {
       const parsed = JSON.parse(rawV2);
-      if (parsed && Array.isArray(parsed.rows)) {
-        return parsed as DraftState;
+      if (parsed && typeof parsed === "object" && Array.isArray(parsed.rows)) {
+        const rows = sanitizeRows(parsed.rows);
+        if (hasMeaningfulInput(rows)) {
+          return {
+            companyId: String(parsed.companyId || ""),
+            siteId: String(parsed.siteId || ""),
+            categoryId: String(parsed.categoryId || ""),
+            timestamp: Number(parsed.timestamp) || Date.now(),
+            rows,
+          };
+        }
       }
     }
 
@@ -38,17 +78,21 @@ export function loadDraft(): DraftState | null {
     if (rawV1) {
       const parsedV1 = JSON.parse(rawV1);
       if (Array.isArray(parsedV1)) {
-        const v2State: DraftState = {
-          rows: parsedV1,
-          companyId: "",
-          siteId: "",
-          categoryId: "",
-          timestamp: Date.now(),
-        };
-        saveDraft(v2State); // Migrate to V2
-        window.localStorage.removeItem("cost-ledger-draft-v1"); // Cleanup V1
-        return v2State;
+        const rows = sanitizeRows(parsedV1);
+        if (hasMeaningfulInput(rows)) {
+          const v2State: DraftState = {
+            rows,
+            companyId: "",
+            siteId: "",
+            categoryId: "",
+            timestamp: Date.now(),
+          };
+          saveDraft(v2State); // Migrate to V2
+          window.localStorage.removeItem("cost-ledger-draft-v1"); // Cleanup V1
+          return v2State;
+        }
       }
+      window.localStorage.removeItem("cost-ledger-draft-v1");
     }
 
     return null;
@@ -82,7 +126,20 @@ export function getTemplates(): Template[] {
     const raw = window.localStorage.getItem(STORAGE_KEY_TEMPLATES);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (t: unknown): t is Record<string, unknown> =>
+          t !== null && typeof t === "object" && "id" in t && "name" in t,
+      )
+      .map((t) => ({
+        id: String(t.id),
+        name: String(t.name),
+        companyId: String(t.companyId || ""),
+        siteId: String(t.siteId || ""),
+        categoryId: String(t.categoryId || ""),
+        rows: sanitizeRows(t.rows),
+      }));
   } catch {
     return [];
   }
@@ -98,6 +155,19 @@ export function saveTemplate(template: Template): void {
       templates.push(template);
     }
     window.localStorage.setItem(STORAGE_KEY_TEMPLATES, JSON.stringify(templates));
+  } catch {
+    // Ignore
+  }
+}
+
+export function renameTemplate(id: string, newName: string): void {
+  try {
+    const templates = getTemplates();
+    const t = templates.find((x) => x.id === id);
+    if (t) {
+      t.name = newName;
+      window.localStorage.setItem(STORAGE_KEY_TEMPLATES, JSON.stringify(templates));
+    }
   } catch {
     // Ignore
   }
@@ -122,7 +192,8 @@ export function getRecentItems(): string[] {
     const raw = window.localStorage.getItem(STORAGE_KEY_RECENT_ITEMS);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((i) => typeof i === "string");
   } catch {
     return [];
   }
@@ -131,7 +202,7 @@ export function getRecentItems(): string[] {
 export function addRecentItems(newItems: string[]): string[] {
   try {
     const current = getRecentItems();
-    const itemsToAdd = newItems.filter((i) => i.trim() !== "");
+    const itemsToAdd = newItems.filter((i) => typeof i === "string" && i.trim() !== "");
 
     // Combine and deduplicate based on normalized name, keeping the latest entered format
     const all = [...itemsToAdd.reverse(), ...current];

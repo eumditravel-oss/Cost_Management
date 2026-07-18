@@ -236,6 +236,19 @@ export default function LedgerPage() {
     }
   };
 
+  const handleRenameTemplate = () => {
+    if (!selectedTemplateId) return;
+    const t = templates.find((x) => x.id === selectedTemplateId);
+    if (!t) return;
+    const newName = window.prompt("변경할 템플릿 이름을 입력하세요:", t.name);
+    if (newName && newName.trim()) {
+      import("@/ledger/storage").then(({ renameTemplate }) => {
+        renameTemplate(selectedTemplateId, newName.trim());
+        setTemplates(getTemplates());
+      });
+    }
+  };
+
   const handleSave = async () => {
     if (!companyId || !siteId || !categoryId) {
       alert("회사, 현장, 비용 분류를 선택해주세요.");
@@ -409,6 +422,13 @@ export default function LedgerPage() {
           disabled={!selectedTemplateId}
         >
           불러오기
+        </button>
+        <button
+          type="button"
+          onClick={handleRenameTemplate}
+          disabled={!selectedTemplateId}
+        >
+          이름 변경
         </button>
         <button
           type="button"
@@ -604,7 +624,10 @@ export default function LedgerPage() {
         중복 확인은 최근 저장된 200건 내에서만 이루어지며 기술적 주의 알림입니다.
         <br />※ 자동 임시저장, 입력 템플릿, 최근 품명 기능은 현재 사용 중인 브라우저
         내에서만 보관(최대 100건 등 기술적 제한 있음)되며 서버로 전송되지 않습니다.
-        브라우저 캐시 삭제 시 소실될 수 있습니다.
+        <br />
+        임시저장과 템플릿 기능은 <strong>적요를 포함한 전체 입력 행 데이터</strong>를
+        브라우저 localStorage에 보관하므로, 공용 PC 사용 시 로그아웃 및 브라우저 캐시
+        삭제에 유의해주세요.
       </p>
     </main>
   );
